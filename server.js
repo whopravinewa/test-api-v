@@ -1,39 +1,62 @@
-var app = require("express")();
+const express = require("express");
 
-app.get("/", (req, res) => {
-  res.send("hello");
-});
-var server = require("http").Server(app);
-var io = require("socket.io")(server);
-
-server.listen(process.env.PORT, () => {
-  console.log("listening at 8080");
+var io = require("socket.io")({
+  path: "/webrtc",
 });
 
-io.on("connection", function (socket) {
-  socket.on("join", function (data) {
-    socket.join(data.roomId);
-    socket.room = data.roomId;
-    const sockets = io.of("/").in().adapter.rooms[data.roomId];
-    if (sockets.length === 1) {
-      socket.emit("init");
-    } else {
-      if (sockets.length === 2) {
-        io.to(data.roomId).emit("ready");
-      } else {
-        socket.room = null;
-        socket.leave(data.roomId);
-        socket.emit("full");
+const app = express();
+const port = 8080;
+
+// app.get('/', (req, res) => res.send('Hello World!!!!!'))
+
+//https://expressjs.com/en/guide/writing-middleware.html
+app.use(express.static(__dirname + "/build"));
+app.get("/", (req, res, next) => {
+  res.sendFile(__dirname + "/build/index.html");
+});
+
+const server = app.listen(process.env.PORT, () =>
+  console.log(`Example app listening on port ${port}!`)
+);
+
+io.listen(server);
+
+// https://www.tutorialspoint.com/socket.io/socket.io_namespaces.htm
+const peers = io.of("/webrtcPeer");
+
+// keep a reference of all socket connections
+let connectedPeers = new Map();
+
+peers.on("connection", (socket) => {
+  console.log(socket.id);
+  socket.emit("connection-success", { success: socket.id });
+
+  connectedPeers.set(socket.id, socket);
+
+  socket.on("disconnect", () => {
+    console.log("disconnected");
+    connectedPeers.delete(socket.id);
+  });
+
+  socket.on("offerOrAnswer", (data) => {
+    // send to the other peer(s) if any
+    for (const [socketID, socket] of connectedPeers.entries()) {
+      // don't send to self
+      if (socketID !== data.socketID) {
+        console.log(socketID, data.payload.type);
+        socket.emit("offerOrAnswer", data.payload);
       }
     }
   });
-  socket.on("signal", (data) => {
-    io.to(data.room).emit("desc", data.desc);
-  });
-  socket.on("disconnect", () => {
-    const roomId = Object.keys(socket.adapter.rooms)[0];
-    if (socket.room) {
-      io.to(socket.room).emit("disconnected");
+
+  socket.on("candidate", (data) => {
+    // send candidate to the other peer(s) if any
+    for (const [socketID, socket] of connectedPeers.entries()) {
+      // don't send to self
+      if (socketID !== data.socketID) {
+        console.log(socketID, data.payload);
+        socket.emit("candidate", data.payload);
+      }
     }
   });
 });
